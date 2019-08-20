@@ -1,4 +1,4 @@
-# Android-LcdParamConfig
+# Android-A2dpSink
 Apply patches to enable Android to support the Bluetooth a2dpsink protocol, which allows Android to work like a Bluetooth speaker for audio output.
 
 - a2dpsink_android5.1.patch for android 5.1
