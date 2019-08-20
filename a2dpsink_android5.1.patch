@@ -1,0 +1,822 @@
+diff --git a/device/rockchip/common/audio_policy_rk30board.conf b/device/rockchip/common/audio_policy_rk30board.conf
+old mode 100644
+new mode 100755
+index 4e64d0e..83e3d63
+--- a/device/rockchip/common/audio_policy_rk30board.conf
++++ b/device/rockchip/common/audio_policy_rk30board.conf
+@@ -63,6 +63,14 @@ audio_hw_modules {
+         devices AUDIO_DEVICE_OUT_ALL_A2DP
+       }
+     }
++    inputs {
++      a2dp {
++        sampling_rates 44100
++        channel_masks AUDIO_CHANNEL_IN_STEREO
++        formats AUDIO_FORMAT_PCM_16_BIT
++        devices AUDIO_DEVICE_IN_BLUETOOTH_A2DP
++      }
++    }
+   }
+   usb {
+     outputs {
+diff --git a/device/rockchip/common/bluetooth/bdroid_buildcfg.h b/device/rockchip/common/bluetooth/bdroid_buildcfg.h
+index 38afac3..bb22ce2 100755
+--- a/device/rockchip/common/bluetooth/bdroid_buildcfg.h
++++ b/device/rockchip/common/bluetooth/bdroid_buildcfg.h
+@@ -17,7 +17,7 @@
+ #ifndef _BDROID_BUILDCFG_H
+ #define _BDROID_BUILDCFG_H
+ 
+-#define BTM_DEF_LOCAL_NAME	""
++#define BTM_DEF_LOCAL_NAME	"rksdk"
+ #define BTA_DM_COD {0x1A, 0x01, 0x10}
+ 
+ #endif
+diff --git a/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml b/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml
+old mode 100644
+new mode 100755
+index d49246d..8aa6c97
+--- a/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml
++++ b/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml
+@@ -13,9 +13,10 @@
+    limitations under the License.
+ -->
+ <resources>
+-    <bool name="profile_supported_a2dp">true</bool>
++    <bool name="profile_supported_a2dp">false</bool>
++    <bool name="profile_supported_a2dp_sink">true</bool>
+     <bool name="profile_supported_hdp">true</bool>
+-    <bool name="profile_supported_hs_hfp">true</bool>
++    <bool name="profile_supported_hs_hfp">false</bool>
+     <bool name="profile_supported_hid">true</bool>
+     <bool name="profile_supported_opp">true</bool>
+     <bool name="profile_supported_pan">true</bool>
+@@ -24,4 +25,5 @@
+     <bool name="pbap_include_photos_in_vcard">false</bool>
+     <bool name="pbap_use_profile_for_owner_vcard">true</bool>
+     <bool name="profile_supported_map">false</bool>
++    <bool name="profile_supported_avrcp_controller">true</bool>
+ </resources>
+diff --git a/external/bluetooth/bluedroid/include/bt_target.h b/external/bluetooth/bluedroid/include/bt_target.h
+old mode 100644
+new mode 100755
+index b2068ee..0d929fb
+--- a/external/bluetooth/bluedroid/include/bt_target.h
++++ b/external/bluetooth/bluedroid/include/bt_target.h
+@@ -168,7 +168,7 @@
+ #endif
+ 
+ #ifndef BTA_AV_SINK_INCLUDED
+-#define BTA_AV_SINK_INCLUDED FALSE
++#define BTA_AV_SINK_INCLUDED TRUE
+ #endif
+ 
+ #ifndef BTA_DISABLE_DELAY
+diff --git a/external/bluetooth/bluedroid/stack/include/hcidefs.h b/external/bluetooth/bluedroid/stack/include/hcidefs.h
+old mode 100644
+new mode 100755
+index 0349d6a..baadd7e
+--- a/external/bluetooth/bluedroid/stack/include/hcidefs.h
++++ b/external/bluetooth/bluedroid/stack/include/hcidefs.h
+@@ -1325,6 +1325,10 @@ typedef struct
+ #define HCI_BRCM_ACL_PRIORITY_LOW           0x00
+ #define HCI_BRCM_ACL_PRIORITY_HIGH          0xFF
+ #define HCI_BRCM_SET_ACL_PRIORITY           (0x0057 | HCI_GRP_VENDOR_SPECIFIC)
++#define HCI_BRCM_SET_A2DP_PRIORITY          (0x011A | HCI_GRP_VENDOR_SPECIFIC)
++#define HCI_BRCM_ACL_PRIORITY_NORMAL        0x00
++#define HCI_BRCM_ACL_PRIORITY_A2DP          0x01
++#define HCI_BRCM_ACL_PRIORITY_A2DP_PARAM_SIZE    4
+ 
+ /* Define values for LMP Test Control parameters
+ ** Test Scenario, Hopping Mode, Power Control Mode
+diff --git a/external/bluetooth/bluedroid/stack/l2cap/l2c_utils.c b/external/bluetooth/bluedroid/stack/l2cap/l2c_utils.c
+old mode 100644
+new mode 100755
+index 77849ac..aa4263c
+--- a/external/bluetooth/bluedroid/stack/l2cap/l2c_utils.c
++++ b/external/bluetooth/bluedroid/stack/l2cap/l2c_utils.c
+@@ -2499,6 +2499,7 @@ BOOLEAN l2cu_set_acl_priority (BD_ADDR bd_addr, UINT8 priority, BOOLEAN reset_af
+     UINT8               *pp;
+     UINT8                command[HCI_BRCM_ACL_PRIORITY_PARAM_SIZE];
+     UINT8                vs_param;
++	UINT8                type_param;
+ 
+     APPL_TRACE_EVENT("SET ACL PRIORITY %d", priority);
+ 
+@@ -2518,12 +2519,17 @@ BOOLEAN l2cu_set_acl_priority (BD_ADDR bd_addr, UINT8 priority, BOOLEAN reset_af
+         {
+             pp = command;
+ 
+-            vs_param = (priority == L2CAP_PRIORITY_HIGH) ? HCI_BRCM_ACL_PRIORITY_HIGH : HCI_BRCM_ACL_PRIORITY_LOW;
++            //vs_param = (priority == L2CAP_PRIORITY_HIGH) ? HCI_BRCM_ACL_PRIORITY_HIGH : HCI_BRCM_ACL_PRIORITY_LOW;
++			vs_param = (priority == L2CAP_PRIORITY_HIGH) ? HCI_BRCM_ACL_PRIORITY_A2DP: HCI_BRCM_ACL_PRIORITY_NORMAL;
++            type_param = 0x01;
++            L2CAP_TRACE_WARNING("Luke: SET ACL PRIORITY %d", priority);
+ 
+             UINT16_TO_STREAM (pp, p_lcb->handle);
+             UINT8_TO_STREAM  (pp, vs_param);
+-
+-            BTM_VendorSpecificCommand (HCI_BRCM_SET_ACL_PRIORITY, HCI_BRCM_ACL_PRIORITY_PARAM_SIZE, command, NULL);
++			UINT8_TO_STREAM  (pp, type_param);
++			
++            //BTM_VendorSpecificCommand (HCI_BRCM_SET_ACL_PRIORITY, HCI_BRCM_ACL_PRIORITY_PARAM_SIZE, command, NULL);
++            BTM_VendorSpecificCommand (HCI_BRCM_SET_A2DP_PRIORITY, HCI_BRCM_ACL_PRIORITY_A2DP_PARAM_SIZE, command, NULL);
+ 
+             /* Adjust lmp buffer allocation for this channel if priority changed */
+             if (p_lcb->acl_priority != priority)
+diff --git a/external/bluetooth_rtk/bluedroid/include/bt_target.h b/external/bluetooth_rtk/bluedroid/include/bt_target.h
+old mode 100644
+new mode 100755
+index 66b5f98..53ba099
+--- a/external/bluetooth_rtk/bluedroid/include/bt_target.h
++++ b/external/bluetooth_rtk/bluedroid/include/bt_target.h
+@@ -168,7 +168,7 @@
+ #endif
+ 
+ #ifndef BTA_AV_SINK_INCLUDED
+-#define BTA_AV_SINK_INCLUDED FALSE
++#define BTA_AV_SINK_INCLUDED TRUE
+ #endif
+ 
+ #ifndef BTA_DISABLE_DELAY
+diff --git a/external/bluetooth_rtk/bluedroid/stack/include/hcidefs.h b/external/bluetooth_rtk/bluedroid/stack/include/hcidefs.h
+old mode 100644
+new mode 100755
+index 0349d6a..baadd7e
+--- a/external/bluetooth_rtk/bluedroid/stack/include/hcidefs.h
++++ b/external/bluetooth_rtk/bluedroid/stack/include/hcidefs.h
+@@ -1325,6 +1325,10 @@ typedef struct
+ #define HCI_BRCM_ACL_PRIORITY_LOW           0x00
+ #define HCI_BRCM_ACL_PRIORITY_HIGH          0xFF
+ #define HCI_BRCM_SET_ACL_PRIORITY           (0x0057 | HCI_GRP_VENDOR_SPECIFIC)
++#define HCI_BRCM_SET_A2DP_PRIORITY          (0x011A | HCI_GRP_VENDOR_SPECIFIC)
++#define HCI_BRCM_ACL_PRIORITY_NORMAL        0x00
++#define HCI_BRCM_ACL_PRIORITY_A2DP          0x01
++#define HCI_BRCM_ACL_PRIORITY_A2DP_PARAM_SIZE    4
+ 
+ /* Define values for LMP Test Control parameters
+ ** Test Scenario, Hopping Mode, Power Control Mode
+diff --git a/external/bluetooth_rtk/bluedroid/stack/l2cap/l2c_utils.c b/external/bluetooth_rtk/bluedroid/stack/l2cap/l2c_utils.c
+old mode 100644
+new mode 100755
+index 77849ac..1579f33
+--- a/external/bluetooth_rtk/bluedroid/stack/l2cap/l2c_utils.c
++++ b/external/bluetooth_rtk/bluedroid/stack/l2cap/l2c_utils.c
+@@ -2499,6 +2499,7 @@ BOOLEAN l2cu_set_acl_priority (BD_ADDR bd_addr, UINT8 priority, BOOLEAN reset_af
+     UINT8               *pp;
+     UINT8                command[HCI_BRCM_ACL_PRIORITY_PARAM_SIZE];
+     UINT8                vs_param;
++    UINT8                type_param;
+ 
+     APPL_TRACE_EVENT("SET ACL PRIORITY %d", priority);
+ 
+@@ -2518,12 +2519,17 @@ BOOLEAN l2cu_set_acl_priority (BD_ADDR bd_addr, UINT8 priority, BOOLEAN reset_af
+         {
+             pp = command;
+ 
+-            vs_param = (priority == L2CAP_PRIORITY_HIGH) ? HCI_BRCM_ACL_PRIORITY_HIGH : HCI_BRCM_ACL_PRIORITY_LOW;
++            //vs_param = (priority == L2CAP_PRIORITY_HIGH) ? HCI_BRCM_ACL_PRIORITY_HIGH : HCI_BRCM_ACL_PRIORITY_LOW;
++			vs_param = (priority == L2CAP_PRIORITY_HIGH) ? HCI_BRCM_ACL_PRIORITY_A2DP: HCI_BRCM_ACL_PRIORITY_NORMAL;
++            type_param = 0x01;
++            L2CAP_TRACE_WARNING("Luke: SET ACL PRIORITY %d", priority);
+ 
+             UINT16_TO_STREAM (pp, p_lcb->handle);
+             UINT8_TO_STREAM  (pp, vs_param);
+-
+-            BTM_VendorSpecificCommand (HCI_BRCM_SET_ACL_PRIORITY, HCI_BRCM_ACL_PRIORITY_PARAM_SIZE, command, NULL);
++            UINT8_TO_STREAM  (pp, type_param);
++			
++            //BTM_VendorSpecificCommand (HCI_BRCM_SET_ACL_PRIORITY, HCI_BRCM_ACL_PRIORITY_PARAM_SIZE, command, NULL);
++            BTM_VendorSpecificCommand (HCI_BRCM_SET_A2DP_PRIORITY, HCI_BRCM_ACL_PRIORITY_A2DP_PARAM_SIZE, command, NULL);
+ 
+             /* Adjust lmp buffer allocation for this channel if priority changed */
+             if (p_lcb->acl_priority != priority)
+diff --git a/frameworks/av/services/audioflinger/Android.mk b/frameworks/av/services/audioflinger/Android.mk
+index f0196c6..6d7fd51 100755
+--- a/frameworks/av/services/audioflinger/Android.mk
++++ b/frameworks/av/services/audioflinger/Android.mk
+@@ -83,6 +83,10 @@ endif
+ 
+ LOCAL_CFLAGS += -fvisibility=hidden
+ 
++#ifeq ($(TARGET_PRODUCT), rk322x_echo)
++LOCAL_CFLAGS += -DTEST
++#endif
++
+ include $(BUILD_SHARED_LIBRARY)
+ 
+ #
+diff --git a/frameworks/av/services/audioflinger/Threads.cpp b/frameworks/av/services/audioflinger/Threads.cpp
+old mode 100644
+new mode 100755
+index 4c90be5..0d247c5
+--- a/frameworks/av/services/audioflinger/Threads.cpp
++++ b/frameworks/av/services/audioflinger/Threads.cpp
+@@ -4990,7 +4990,13 @@ AudioFlinger::RecordThread::RecordThread(const sp<AudioFlinger>& audioFlinger,
+                 ((primaryOutputSampleRate == 0) &&
+                     ((mSampleRate == 44100 || mSampleRate == 48000)))) &&
+                 // and the buffer size is < 12 ms
++#ifdef TEST
++                ((mFrameCount * 1000) / mSampleRate < 12) &&
++                // and input device is not a2dp
++                !audio_is_a2dp_in_device(inDevice);
++#else
+                 (mFrameCount * 1000) / mSampleRate < 12;
++#endif
+         break;
+     // case FastCapture_Dynamic:
+     }
+diff --git a/frameworks/av/services/audiopolicy/AudioPolicyManager.cpp b/frameworks/av/services/audiopolicy/AudioPolicyManager.cpp
+index 6c1b13a..85be056 100755
+--- a/frameworks/av/services/audiopolicy/AudioPolicyManager.cpp
++++ b/frameworks/av/services/audiopolicy/AudioPolicyManager.cpp
+@@ -832,7 +832,7 @@ void AudioPolicyManager::setForceUse(audio_policy_force_use_t usage,
+ 
+     audio_io_handle_t activeInput = getActiveInput();
+     if (activeInput != 0) {
+-        setInputDevice(activeInput, getNewInputDevice(activeInput));
++        //setInputDevice(activeInput, getNewInputDevice(activeInput));
+     }
+ 
+ }
+@@ -1583,6 +1583,31 @@ status_t AudioPolicyManager::getInputForAttr(const audio_attributes_t *attr,
+         ALOGE("getInputForAttr(): HW module %s not opened", profile->mModule->mName);
+         return NO_INIT;
+     }
++	
++    // check whether available input is existed or not
++    if (mInputs.size() > 0) {
++        sp<AudioInputDescriptor> inputDesc = 0;
++        for (size_t i = 0; i < mInputs.size(); i++){
++            inputDesc = mInputs.valueAt(i);
++            if (inputDesc->mProfile == profile) {
++                // found the available input
++                *input = mInputs.keyAt(i);
++                break;
++            }
++        }
++
++        if (inputDesc == 0) {
++            ALOGV("getInputForAttr(): no available input exist, open new input!!!");
++        } else if(inputDesc != 0 && *input != 0  ) {
++	        ALOGW("getInputForAttr(): already exists available input %d, *input:%d", inputDesc->mIoHandle,*input );
++            // update the input descriptor information.
++            inputDesc->mOpenRefCount++;
++            inputDesc->mSessions.add(session);
++            return NO_ERROR;
++        } else {
++		    inputDesc = 0;
++        }
++    }
+ 
+     audio_config_t config = AUDIO_CONFIG_INITIALIZER;
+     config.sample_rate = samplingRate;
+@@ -1662,7 +1687,7 @@ status_t AudioPolicyManager::startInput(audio_io_handle_t input,
+                 releaseInput(activeInput, activeDesc->mSessions.itemAt(0));
+             } else {
+                 ALOGE("startInput(%d) failed: other input %d already started", input, activeInput);
+-                return INVALID_OPERATION;
++                //return INVALID_OPERATION;
+             }
+         }
+     }
+@@ -5320,19 +5345,26 @@ audio_devices_t AudioPolicyManager::getDeviceForInputSource(audio_source_t input
+ 
+     case AUDIO_SOURCE_DEFAULT:
+     case AUDIO_SOURCE_MIC:
+-    if (availableDeviceTypes & AUDIO_DEVICE_IN_BLUETOOTH_A2DP) {
+-        device = AUDIO_DEVICE_IN_BLUETOOTH_A2DP;
+-    } else if ((mForceUse[AUDIO_POLICY_FORCE_FOR_RECORD] == AUDIO_POLICY_FORCE_BT_SCO) &&
+-        (availableDeviceTypes & AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET)) {
+-        device = AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET;
+-    } else if (availableDeviceTypes & AUDIO_DEVICE_IN_WIRED_HEADSET) {
+-        device = AUDIO_DEVICE_IN_WIRED_HEADSET;
+-    } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_DEVICE) {
+-        device = AUDIO_DEVICE_IN_USB_DEVICE;
+-    } else if (availableDeviceTypes & AUDIO_DEVICE_IN_BUILTIN_MIC) {
+-        device = AUDIO_DEVICE_IN_BUILTIN_MIC;
+-    }
+-    break;
++        /*if (availableDeviceTypes & AUDIO_DEVICE_IN_BLUETOOTH_A2DP) {
++            device = AUDIO_DEVICE_IN_BLUETOOTH_A2DP;
++        } else */if ((mForceUse[AUDIO_POLICY_FORCE_FOR_RECORD] == AUDIO_POLICY_FORCE_BT_SCO) &&
++            (availableDeviceTypes & AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET)) {
++            device = AUDIO_DEVICE_IN_BLUETOOTH_SCO_HEADSET;
++        } else if (availableDeviceTypes & AUDIO_DEVICE_IN_WIRED_HEADSET) {
++            device = AUDIO_DEVICE_IN_WIRED_HEADSET;
++        } else if (availableDeviceTypes & AUDIO_DEVICE_IN_USB_DEVICE) {
++            device = AUDIO_DEVICE_IN_USB_DEVICE;
++        } else if (availableDeviceTypes & AUDIO_DEVICE_IN_BUILTIN_MIC) {
++            device = AUDIO_DEVICE_IN_BUILTIN_MIC;
++        }
++        break;
++	
++    case 11://AUDIO_SOURCE_BLUETOOTH_A2DP:
++        ALOGE("getDeviceForInputSource, AUDIO_SOURCE_BLUETOOTH_A2DP availableDeviceTypes:%x", availableDeviceTypes);
++        if (availableDeviceTypes & AUDIO_DEVICE_IN_BLUETOOTH_A2DP) {
++            device = AUDIO_DEVICE_IN_BLUETOOTH_A2DP;
++        }
++        break;
+ 
+     case AUDIO_SOURCE_VOICE_COMMUNICATION:
+         // Allow only use of devices on primary input if in call and HAL does not support routing
+diff --git a/frameworks/base/core/java/android/bluetooth/BluetoothA2dpSink.java b/frameworks/base/core/java/android/bluetooth/BluetoothA2dpSink.java
+index 40b3a70..aba0c6e 100755
+--- a/frameworks/base/core/java/android/bluetooth/BluetoothA2dpSink.java
++++ b/frameworks/base/core/java/android/bluetooth/BluetoothA2dpSink.java
+@@ -40,7 +40,7 @@ import java.util.List;
+ public final class BluetoothA2dpSink implements BluetoothProfile {
+     private static final String TAG = "BluetoothA2dpSink";
+     private static final boolean DBG = true;
+-    private static final boolean VDBG = false;
++    private static final boolean VDBG = true;
+ 
+     /**
+      * Intent used to broadcast the change in connection state of the A2DP Sink
+@@ -161,6 +161,7 @@ public final class BluetoothA2dpSink implements BluetoothProfile {
+      *
+      */
+     /*package*/ BluetoothA2dpSink(Context context, ServiceListener l) {
++		Log.i(TAG, "BluetoothA2dpSink...");
+         mContext = context;
+         mServiceListener = l;
+         mAdapter = BluetoothAdapter.getDefaultAdapter();
+diff --git a/frameworks/base/media/java/android/media/AudioAttributes.java b/frameworks/base/media/java/android/media/AudioAttributes.java
+old mode 100644
+new mode 100755
+index 489f552..e48475f
+--- a/frameworks/base/media/java/android/media/AudioAttributes.java
++++ b/frameworks/base/media/java/android/media/AudioAttributes.java
+@@ -516,6 +516,7 @@ public final class AudioAttributes implements Parcelable {
+                 case MediaRecorder.AudioSource.CAMCORDER:
+                 case MediaRecorder.AudioSource.VOICE_RECOGNITION:
+                 case MediaRecorder.AudioSource.VOICE_COMMUNICATION:
++                case 11://a2dp sink
+                     mSource = preset;
+                     break;
+                 default:
+diff --git a/frameworks/base/media/java/android/media/MediaRecorder.java b/frameworks/base/media/java/android/media/MediaRecorder.java
+old mode 100644
+new mode 100755
+index 81d5afe..6ba804a
+--- a/frameworks/base/media/java/android/media/MediaRecorder.java
++++ b/frameworks/base/media/java/android/media/MediaRecorder.java
+@@ -375,7 +375,8 @@ public class MediaRecorder
+      * @see android.media.MediaRecorder.AudioSource
+      */
+     public static final int getAudioSourceMax() {
+-        return AudioSource.REMOTE_SUBMIX;
++        //return AudioSource.REMOTE_SUBMIX;
++        return 11;//a2dp sink
+     }
+ 
+     /**
+diff --git a/hardware/libhardware_legacy/include/hardware_legacy/AudioSystemLegacy.h b/hardware/libhardware_legacy/include/hardware_legacy/AudioSystemLegacy.h
+index 8d9b6b5..e73b6b2 100755
+--- a/hardware/libhardware_legacy/include/hardware_legacy/AudioSystemLegacy.h
++++ b/hardware/libhardware_legacy/include/hardware_legacy/AudioSystemLegacy.h
+@@ -61,8 +61,9 @@ enum audio_source {
+     AUDIO_SOURCE_CAMCORDER = 5,
+     AUDIO_SOURCE_VOICE_RECOGNITION = 6,
+     AUDIO_SOURCE_VOICE_COMMUNICATION = 7,
+-	AUDIO_SOURCE_REMOTE_SUBMIX		 = 8, /* Source for the mix to be presented remotely.	   */
+-    AUDIO_SOURCE_MAX = AUDIO_SOURCE_REMOTE_SUBMIX,
++    AUDIO_SOURCE_REMOTE_SUBMIX = 8, /* Source for the mix to be presented remotely. */
++    AUDIO_SOURCE_BLUETOOTH_A2DP = 11,
++    AUDIO_SOURCE_MAX = 12,
+ 
+     AUDIO_SOURCE_LIST_END  // must be last - used to validate audio source type
+ };
+diff --git a/packages/apps/Bluetooth/AndroidManifest.xml b/packages/apps/Bluetooth/AndroidManifest.xml
+old mode 100644
+new mode 100755
+index e879a75..8c5839d
+--- a/packages/apps/Bluetooth/AndroidManifest.xml
++++ b/packages/apps/Bluetooth/AndroidManifest.xml
+@@ -56,6 +56,7 @@
+     <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+     <uses-permission android:name="android.permission.MEDIA_CONTENT_CONTROL" />
+     <uses-permission android:name="android.permission.MANAGE_DOCUMENTS" />
++	<uses-permission android:name="android.permission.RECORD_AUDIO"/>
+ 
+     <!-- For PBAP Owner Vcard Info -->
+     <uses-permission android:name="android.permission.READ_PROFILE"/>
+diff --git a/packages/apps/Bluetooth/res/values/config.xml b/packages/apps/Bluetooth/res/values/config.xml
+old mode 100644
+new mode 100755
+index f2b4ebb..7a92077
+--- a/packages/apps/Bluetooth/res/values/config.xml
++++ b/packages/apps/Bluetooth/res/values/config.xml
+@@ -13,10 +13,10 @@
+    limitations under the License.
+ -->
+ <resources>
+-    <bool name="profile_supported_a2dp">true</bool>
+-    <bool name="profile_supported_a2dp_sink">false</bool>
++    <bool name="profile_supported_a2dp">false</bool>
++    <bool name="profile_supported_a2dp_sink">true</bool>
+     <bool name="profile_supported_hdp">true</bool>
+-    <bool name="profile_supported_hs_hfp">true</bool>
++    <bool name="profile_supported_hs_hfp">false</bool>
+     <bool name="profile_supported_hfpclient">false</bool>
+     <bool name="profile_supported_hid">true</bool>
+     <bool name="profile_supported_opp">true</bool>
+@@ -26,5 +26,5 @@
+     <bool name="pbap_include_photos_in_vcard">false</bool>
+     <bool name="pbap_use_profile_for_owner_vcard">true</bool>
+     <bool name="profile_supported_map">true</bool>
+-    <bool name="profile_supported_avrcp_controller">false</bool>
++    <bool name="profile_supported_avrcp_controller">true</bool>
+ </resources>
+diff --git a/packages/apps/Bluetooth/src/com/android/bluetooth/a2dp/A2dpSinkStateMachine.java b/packages/apps/Bluetooth/src/com/android/bluetooth/a2dp/A2dpSinkStateMachine.java
+old mode 100644
+new mode 100755
+index d57a0ca..b7d1819
+--- a/packages/apps/Bluetooth/src/com/android/bluetooth/a2dp/A2dpSinkStateMachine.java
++++ b/packages/apps/Bluetooth/src/com/android/bluetooth/a2dp/A2dpSinkStateMachine.java
+@@ -38,6 +38,7 @@ import android.bluetooth.IBluetooth;
+ import android.content.Context;
+ import android.media.AudioFormat;
+ import android.media.AudioManager;
++import android.media.AudioManager.OnAudioFocusChangeListener;
+ import android.os.Handler;
+ import android.os.Message;
+ import android.os.ParcelUuid;
+@@ -59,9 +60,36 @@ import java.util.ArrayList;
+ import java.util.List;
+ import java.util.HashMap;
+ import java.util.Set;
++import android.media.AudioFormat;
++import android.media.AudioRecord;
++import android.media.AudioTrack;
++import android.media.MediaRecorder.AudioSource;
++import java.io.FileOutputStream;   
++import java.io.File;  
++import java.io.FileNotFoundException;
++import java.io.IOException;
++
++import java.util.concurrent.locks.Lock;  
++import java.util.concurrent.locks.ReentrantLock;
++
+ 
+ final class A2dpSinkStateMachine extends StateMachine {
+-    private static final boolean DBG = false;
++    private static final boolean DBG = true;
++
++	private AudioRecord recorder;
++	private AudioTrack player;
++	private int recorder_buf_size;
++	private int player_buf_size;
++	private boolean mThreadExitFlag = false;
++	private boolean isPlaying = false;
++
++	private static final int BUFFER_LEN = 64;
++	byte[][] buffer;
++	private int[] buflen = new int[BUFFER_LEN];
++    private int bufferRecPoint = 0;
++	private int bufferPlayPoint = 0;
++	private Lock lock = new ReentrantLock();
++	private int currentSamprate = 44100;
+ 
+     static final int CONNECT = 1;
+     static final int DISCONNECT = 2;
+@@ -138,6 +166,65 @@ final class A2dpSinkStateMachine extends StateMachine {
+         mIntentBroadcastHandler = new IntentBroadcastHandler();
+ 
+         mAudioManager = (AudioManager) context.getSystemService(Context.AUDIO_SERVICE);
++		recorder_buf_size = AudioRecord.getMinBufferSize(currentSamprate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
++        player_buf_size = AudioTrack.getMinBufferSize(currentSamprate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
++
++		buffer = new byte[BUFFER_LEN][recorder_buf_size];
++    }
++    private void cleanAudioTrack()
++    {
++        audioPause();
++        mThreadExitFlag = true;
++        if (recorder != null) {
++            recorder.release();
++            recorder = null;
++        }
++        if (player != null) {
++            player.release();
++            player = null;
++        }
++    }
++    private void initAudioTrack()
++    {
++        if (recorder == null) {
++            recorder = new AudioRecord(11/*AudioSource.DEFAULT*/,
++                44100,
++                AudioFormat.CHANNEL_IN_STEREO,
++                AudioFormat.ENCODING_PCM_16BIT,
++                recorder_buf_size
++                );
++        }
++
++        if (player == null) {
++            player = new AudioTrack(AudioManager.STREAM_MUSIC,
++                44100,
++                AudioFormat.CHANNEL_OUT_STEREO,
++                AudioFormat.ENCODING_PCM_16BIT,
++                player_buf_size,
++                AudioTrack.MODE_STREAM
++                );
++        }
++    }
++    private void audioPlay()
++    {
++        
++        if (isPlaying == false) {
++            isPlaying = true;
++            mThreadExitFlag = false;
++			bufferRecPoint = 0;
++			bufferPlayPoint = 0;
++            new RecordThread().start();
++			new PlayerThread().start();
++        }
++    }
++    private void audioPause()
++    {
++        if (isPlaying == true) {
++            isPlaying = false;
++            mThreadExitFlag = true;
++            recorder.stop();
++            player.stop();
++        }
+     }
+ 
+     static A2dpSinkStateMachine make(A2dpSinkService svc, Context context) {
+@@ -167,6 +254,8 @@ final class A2dpSinkStateMachine extends StateMachine {
+         @Override
+         public void enter() {
+             log("Enter Disconnected: " + getCurrentMessage().what);
++            cleanAudioTrack();
++            
+         }
+ 
+         @Override
+@@ -477,6 +566,7 @@ final class A2dpSinkStateMachine extends StateMachine {
+             // Upon connected, the audio starts out as stopped
+             broadcastAudioState(mCurrentDevice, BluetoothA2dpSink.STATE_NOT_PLAYING,
+                                 BluetoothA2dpSink.STATE_PLAYING);
++		//initAudioTrack();
+         }
+ 
+         @Override
+@@ -576,15 +666,23 @@ final class A2dpSinkStateMachine extends StateMachine {
+                                                            mCurrentDevice);
+                 return;
+             }
++			loge("Audio State Device: " + device + "  state: " + state);
+             switch (state) {
+                 case AUDIO_STATE_STARTED:
+-                    broadcastAudioState(device, BluetoothA2dpSink.STATE_PLAYING,
+-                                        BluetoothA2dpSink.STATE_NOT_PLAYING);
++                     broadcastAudioState(device, BluetoothA2dpSink.STATE_PLAYING,
++                           BluetoothA2dpSink.STATE_NOT_PLAYING);
++                     mAudioManager.requestAudioFocus(mAudioFocusListener, AudioManager.STREAM_MUSIC,
++                           AudioManager.AUDIOFOCUS_GAIN_TRANSIENT);
++                     audioPlay();
++
+                     break;
+                 case AUDIO_STATE_REMOTE_SUSPEND:
+                 case AUDIO_STATE_STOPPED:
+-                    broadcastAudioState(device, BluetoothA2dpSink.STATE_NOT_PLAYING,
+-                                        BluetoothA2dpSink.STATE_PLAYING);
++                       broadcastAudioState(device, BluetoothA2dpSink.STATE_NOT_PLAYING,
++                            BluetoothA2dpSink.STATE_PLAYING);
++                       mAudioManager.abandonAudioFocus(mAudioFocusListener);
++                       audioPause();
++                 
+                     break;
+                 default:
+                   loge("Audio State Device: " + device + " bad state: " + state);
+@@ -595,6 +693,14 @@ final class A2dpSinkStateMachine extends StateMachine {
+ 
+     private void processAudioConfigEvent(BluetoothAudioConfig audioConfig, BluetoothDevice device) {
+         mAudioConfigs.put(device, audioConfig);
++		int lastSamprate = currentSamprate;
++		currentSamprate = audioConfig.getSampleRate();
++		if(lastSamprate != currentSamprate){
++			recorder_buf_size = AudioRecord.getMinBufferSize(currentSamprate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
++	        player_buf_size = AudioTrack.getMinBufferSize(currentSamprate, AudioFormat.CHANNEL_IN_STEREO, AudioFormat.ENCODING_PCM_16BIT);
++			buffer = new byte[BUFFER_LEN][recorder_buf_size];
++		}
++		loge("processAudioConfigEvent samprate: " + currentSamprate);
+         broadcastAudioConfig(device, audioConfig);
+     }
+ 
+@@ -693,7 +799,8 @@ final class A2dpSinkStateMachine extends StateMachine {
+     }
+ 
+     private void broadcastAudioState(BluetoothDevice device, int state, int prevState) {
+-        Intent intent = new Intent(BluetoothA2dpSink.ACTION_PLAYING_STATE_CHANGED);
++        //Intent intent = new Intent(BluetoothA2dpSink.ACTION_PLAYING_STATE_CHANGED);//because have char '-',cannot be use in xml
++		Intent intent = new Intent("android.bluetooth.a2dp.sink.profile.action.PLAYING_STATE_CHANGED");
+         intent.putExtra(BluetoothDevice.EXTRA_DEVICE, device);
+         intent.putExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, prevState);
+         intent.putExtra(BluetoothProfile.EXTRA_STATE, state);
+@@ -759,7 +866,8 @@ final class A2dpSinkStateMachine extends StateMachine {
+     private class IntentBroadcastHandler extends Handler {
+ 
+         private void onConnectionStateChanged(BluetoothDevice device, int prevState, int state) {
+-            Intent intent = new Intent(BluetoothA2dpSink.ACTION_CONNECTION_STATE_CHANGED);
++            //Intent intent = new Intent(BluetoothA2dpSink.ACTION_CONNECTION_STATE_CHANGED);//because have char '-',cannot be use in xml
++			Intent intent = new Intent("android.bluetooth.a2dp.sink.profile.action.CONNECTION_STATE_CHANGED");
+             intent.putExtra(BluetoothProfile.EXTRA_PREVIOUS_STATE, prevState);
+             intent.putExtra(BluetoothProfile.EXTRA_STATE, state);
+             intent.putExtra(BluetoothDevice.EXTRA_DEVICE, device);
+@@ -806,4 +914,181 @@ final class A2dpSinkStateMachine extends StateMachine {
+     private native void cleanupNative();
+     private native boolean connectA2dpNative(byte[] address);
+     private native boolean disconnectA2dpNative(byte[] address);
++
++    private OnAudioFocusChangeListener mAudioFocusListener = new OnAudioFocusChangeListener() {
++        public void onAudioFocusChange(int focusChange) {
++
++           if (focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT ||
++			focusChange == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK) {
++           //Log.d(">>>>>>>>>>AudioFocus: received AUDIOFOCUS_LOSS_TRANSIENT","focusChange");
++           // Pause playback
++           audioPause();
++           } else if (focusChange == AudioManager.AUDIOFOCUS_GAIN) {
++           //Log.d(">>>>>>>>>>>AudioFocus: received AUDIOFOCUS_GAIN","focusChange");
++           // Resume playback
++           audioPlay();
++           }
++        }
++    };
++
++	    class RecordThread  extends Thread{
++        @Override
++        public void run() {
++            //try {
++	        //	pcm_out = new FileOutputStream(new File("/sdcard/"+pcm_out_Num+".pcm"));
++			//	pcm_out_Num++;}
++			//	catch (FileNotFoundException e) {
++            //}
++        	for(int i=0;i<3;i++){
++				if (recorder == null) {
++		            recorder = new AudioRecord(11/*AudioSource.DEFAULT*/,
++		                currentSamprate,
++		                AudioFormat.CHANNEL_IN_STEREO,
++		                AudioFormat.ENCODING_PCM_16BIT,
++		                recorder_buf_size
++		                );
++					if(recorder == null){
++						log("**********creat recorder == null retry");
++						try {
++	                        Thread.sleep(1000);
++	                    } catch (InterruptedException e) {
++
++	                    }
++					}else
++						break;
++		        }
++        	}
++			if(recorder == null){
++				log("creat recorder fail RecordThread return");
++				return;
++			}
++			
++            recorder.startRecording();
++            while(true) {
++                if (mThreadExitFlag == true) {
++                    break;
++                }
++                try {
++                    buflen[bufferRecPoint] = recorder.read(buffer[bufferRecPoint], 0, recorder_buf_size);
++                    if (buflen[bufferRecPoint]>0) {
++						//pcm_out.write(buffer[bufferRecPoint],0,buflen[bufferRecPoint]);
++						lock.lock();
++						try{
++							bufferRecPoint ++;
++							if(bufferRecPoint>= BUFFER_LEN)
++								bufferRecPoint = 0;
++						}finally {  
++           					lock.unlock();  
++       					}
++						
++						
++
++                         //log("**********len:"+ buflen[bufferRecPoint]+" bufferRecPoint: " + bufferRecPoint);
++                    }
++
++                } catch (Exception e) {
++                    e.printStackTrace();
++                    break;
++                }
++            }
++
++			//try {
++			//	pcm_out.close();
++			//} catch (IOException e) {
++            //        }
++			log("RecordThread end");
++
++        }
++    }
++
++		class PlayerThread  extends Thread{
++	Boolean waitTbuff100 = false; 
++        @Override
++        public void run() {
++
++		    if (player == null) {
++	            player = new AudioTrack(AudioManager.STREAM_MUSIC,
++	                currentSamprate,
++	                AudioFormat.CHANNEL_OUT_STEREO,
++	                AudioFormat.ENCODING_PCM_16BIT,
++	                player_buf_size,
++	                AudioTrack.MODE_STREAM
++	                );
++        	}
++			if (player == null){
++				log("create player fail");
++				return;
++			}
++			int buffAvailLen = 0;
++            player.play();
++/*
++			while(true) {
++                if (mThreadExitFlag == true) {
++                    break;
++                }
++				lock.lock();
++				try{
++					if(bufferRecPoint>=1)
++						break;
++				}finally {  
++           			lock.unlock();  
++       			}  
++				   try {
++                        Thread.sleep(2);
++                    } catch (InterruptedException e) {
++
++                    }
++			}
++			*/
++            while(true) {
++                if (mThreadExitFlag == true) {
++                    break;
++                }
++				lock.lock();
++				try{
++				buffAvailLen = BUFFER_LEN + bufferRecPoint - bufferPlayPoint;
++				if(buffAvailLen >= BUFFER_LEN)
++					buffAvailLen -= BUFFER_LEN;
++				}finally {  
++           			lock.unlock();  
++       			}
++				//if(buffAvailLen>80)
++				//	log("^^^^^^^^^^buffAvailLen: " + buffAvailLen);
++		if(waitTbuff100 ){
++			if(buffAvailLen <1){
++				try {
++		               		Thread.sleep(1);
++		            	} catch (InterruptedException e) {
++
++		            	}
++				continue;
++			}else
++				waitTbuff100 = false;
++		}
++		if(buffAvailLen>=1 ){
++
++                try {
++
++                    if (buflen[bufferPlayPoint]>0) {
++                        player.write(buffer[bufferPlayPoint], 0, buflen[bufferPlayPoint]);
++						bufferPlayPoint ++;
++						if(bufferPlayPoint >= BUFFER_LEN)
++							bufferPlayPoint = 0;
++                    }
++					
++
++		        } catch (Exception e) {
++		            e.printStackTrace();
++		            break;
++		        }
++		}else{
++			log("^^^^^^^^^buffAvailLen<20");
++			waitTbuff100 = true;
++		}
++
++					
++            }
++			log("PlayerThread end");
++        }
++    }
+ }
+diff --git a/system/core/include/system/audio.h b/system/core/include/system/audio.h
+index 57e98f5..f70d9da 100755
+--- a/system/core/include/system/audio.h
++++ b/system/core/include/system/audio.h
+@@ -142,6 +142,7 @@ typedef enum {
+                                           /*  play the mix captured by this audio source.      */
+     // PEKALL FMR begin:
+     AUDIO_SOURCE_FM_RX              = 9,  // FM recording
++	AUDIO_SOURCE_BLUETOOTH_A2DP     = 11,
+     // PEKALL FMR end
+     AUDIO_SOURCE_CNT,
+     AUDIO_SOURCE_MAX                 = AUDIO_SOURCE_CNT - 1,

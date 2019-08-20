@@ -1,0 +1,709 @@
+diff --git a/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml b/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml
+index 6ce63e9..fb284a2 100755
+--- a/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml
++++ b/device/rockchip/common/overlay/packages/apps/Bluetooth/res/values/config.xml
+@@ -17,8 +17,8 @@
+  */
+ -->
+ <resources>
+-    <bool name="profile_supported_a2dp">true</bool>
+-    <bool name="profile_supported_a2dp_sink">false</bool>
++    <bool name="profile_supported_a2dp">false</bool>
++    <bool name="profile_supported_a2dp_sink">true</bool>
+     <bool name="profile_supported_hdp">false</bool>
+     <bool name="profile_supported_hs_hfp">false</bool>
+     <bool name="profile_supported_hfpclient">false</bool>
+@@ -30,7 +30,7 @@
+     <bool name="pbap_include_photos_in_vcard">false</bool>
+     <bool name="pbap_use_profile_for_owner_vcard">false</bool>
+     <bool name="profile_supported_map">false</bool>
+-    <bool name="profile_supported_avrcp_controller">false</bool>
++    <bool name="profile_supported_avrcp_controller">true</bool>
+     <bool name="profile_supported_sap">false</bool>
+     <bool name="profile_supported_pbapclient">false</bool>
+     <bool name="profile_supported_mapmce">false</bool>
+diff --git a/packages/apps/Bluetooth/src/com/android/bluetooth/a2dpsink/A2dpSinkStreamHandler.java b/packages/apps/Bluetooth/src/com/android/bluetooth/a2dpsink/A2dpSinkStreamHandler.java
+old mode 100644
+new mode 100755
+index dae6df5..8f40dd6
+--- a/packages/apps/Bluetooth/src/com/android/bluetooth/a2dpsink/A2dpSinkStreamHandler.java
++++ b/packages/apps/Bluetooth/src/com/android/bluetooth/a2dpsink/A2dpSinkStreamHandler.java
+@@ -79,7 +79,7 @@ public class A2dpSinkStreamHandler extends Handler {
+     private boolean mStreamAvailable = false;
+     private boolean mSentPause = false;
+     // Keep track of the relevant audio focus (None, Transient, Gain)
+-    private int mAudioFocus = AudioManager.AUDIOFOCUS_NONE;
++    private int mAudioFocus = AudioManager.AUDIOFOCUS_GAIN;
+ 
+     // Focus changes when we are currently holding focus.
+     private OnAudioFocusChangeListener mAudioFocusListener = new OnAudioFocusChangeListener() {
+diff --git a/packages/apps/Bluetooth/src/com/android/bluetooth/btservice/PhonePolicy.java b/packages/apps/Bluetooth/src/com/android/bluetooth/btservice/PhonePolicy.java
+old mode 100644
+new mode 100755
+index b3ef04b..cceef6a
+--- a/packages/apps/Bluetooth/src/com/android/bluetooth/btservice/PhonePolicy.java
++++ b/packages/apps/Bluetooth/src/com/android/bluetooth/btservice/PhonePolicy.java
+@@ -17,6 +17,7 @@
+ package com.android.bluetooth.btservice;
+ 
+ import android.bluetooth.BluetoothA2dp;
++import android.bluetooth.BluetoothA2dpSink;
+ import android.bluetooth.BluetoothAdapter;
+ import android.bluetooth.BluetoothDevice;
+ import android.bluetooth.BluetoothHeadset;
+@@ -36,6 +37,7 @@ import android.os.ParcelUuid;
+ import android.util.Log;
+ 
+ import com.android.bluetooth.a2dp.A2dpService;
++import com.android.bluetooth.a2dpsink.A2dpSinkService;
+ import com.android.bluetooth.hid.HidService;
+ import com.android.bluetooth.hfp.HeadsetService;
+ import com.android.bluetooth.pan.PanService;
+@@ -112,6 +114,13 @@ class PhonePolicy {
+                                     intent)
+                             .sendToTarget();
+                     break;
++                case BluetoothA2dpSink.ACTION_CONNECTION_STATE_CHANGED:
++                    mHandler.obtainMessage(MESSAGE_PROFILE_CONNECTION_STATE_CHANGED,
++                                    BluetoothProfile.A2DP_SINK,
++                                    -1, // No-op argument
++                                    intent)
++                            .sendToTarget();
++                    break;
+                 case BluetoothAdapter.ACTION_STATE_CHANGED:
+                     // Only pass the message on if the adapter has actually changed state from
+                     // non-ON to ON. NOTE: ON is the state depicting BREDR ON and not just BLE ON.
+@@ -189,6 +198,7 @@ class PhonePolicy {
+         IntentFilter filter = new IntentFilter();
+         filter.addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED);
+         filter.addAction(BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED);
++        filter.addAction(BluetoothA2dpSink.ACTION_CONNECTION_STATE_CHANGED);
+         filter.addAction(BluetoothDevice.ACTION_UUID);
+         filter.addAction(BluetoothAdapter.ACTION_STATE_CHANGED);
+         mAdapterService.registerReceiver(mReceiver, filter);
+@@ -251,7 +261,8 @@ class PhonePolicy {
+             BluetoothDevice device, int profileId, int nextState, int prevState) {
+         debugLog("processProfileStateChanged, device=" + device + ", profile=" + profileId + ", "
+                 + prevState + " -> " + nextState);
+-        if (((profileId == BluetoothProfile.A2DP) || (profileId == BluetoothProfile.HEADSET))
++        if (((profileId == BluetoothProfile.A2DP) || (profileId == BluetoothProfile.HEADSET) 
++                || (profileId == BluetoothProfile.A2DP_SINK))
+                 && (nextState == BluetoothProfile.STATE_CONNECTED)) {
+             switch (profileId) {
+                 case BluetoothProfile.A2DP:
+@@ -282,6 +293,7 @@ class PhonePolicy {
+             // Phone profiles.
+             autoConnectHeadset();
+             autoConnectA2dp();
++            autoConnectA2dpSink();
+         } else {
+             debugLog("autoConnect() - BT is in quiet mode. Not initiating auto connections");
+         }
+@@ -326,6 +338,26 @@ class PhonePolicy {
+             }
+         }
+     }
++    
++    private void autoConnectA2dpSink() {
++        final A2dpSinkService a2dpsinkService = A2dpSinkService.getA2dpSinkService();
++        if (a2dpsinkService == null) {
++            errorLog("autoConnectA2dpsink, service is null");
++            return;
++        }
++        final BluetoothDevice bondedDevices[] = mAdapterService.getBondedDevices();
++        if (bondedDevices == null) {
++            errorLog("autoConnectA2dpsink, bondedDevices are null");
++            return;
++        }
++        for (BluetoothDevice device : bondedDevices) {
++            debugLog("autoConnectA2dpsink, attempt auto-connect with device " + device);
++            if (a2dpsinkService.getPriority(device) == BluetoothProfile.PRIORITY_AUTO_CONNECT) {
++                debugLog("autoConnectA2dpsink, connecting A2DP with " + device);
++                a2dpsinkService.connect(device);
++            }
++        }
++    }
+ 
+     private void connectOtherProfile(BluetoothDevice device) {
+         if ((!mHandler.hasMessages(MESSAGE_CONNECT_OTHER_PROFILES))
+@@ -408,6 +440,7 @@ class PhonePolicy {
+     }
+ 
+     private void setProfileAutoConnectionPriority(BluetoothDevice device, int profileId) {
++        Log.w(TAG, "setProfileAutoConnectionPriority " + profileId);
+         switch (profileId) {
+             case BluetoothProfile.HEADSET:
+                 HeadsetService hsService = mFactory.getHeadsetService();
+@@ -429,6 +462,15 @@ class PhonePolicy {
+                 }
+                 break;
+ 
++            case BluetoothProfile.A2DP_SINK:
++                A2dpSinkService a2dpsinkService = A2dpSinkService.getA2dpSinkService();
++                if ((a2dpsinkService != null) && (BluetoothProfile.PRIORITY_AUTO_CONNECT
++                                                     != a2dpsinkService.getPriority(device))) {
++                    adjustOtherSourcePriorities(a2dpsinkService, device);
++                    a2dpsinkService.setPriority(device, BluetoothProfile.PRIORITY_AUTO_CONNECT);
++                }
++                break;
++
+             default:
+                 Log.w(TAG, "Tried to set AutoConnect priority on invalid profile " + profileId);
+                 break;
+@@ -455,6 +497,16 @@ class PhonePolicy {
+         }
+     }
+ 
++    private void adjustOtherSourcePriorities(
++            A2dpSinkService a2dpsinkService, BluetoothDevice connectedDevice) {
++        for (BluetoothDevice device : mAdapterService.getBondedDevices()) {
++            if (a2dpsinkService.getPriority(device) >= BluetoothProfile.PRIORITY_AUTO_CONNECT
++                    && !device.equals(connectedDevice)) {
++                a2dpsinkService.setPriority(device, BluetoothProfile.PRIORITY_ON);
++            }
++        }
++    }
++
+     private static void debugLog(String msg) {
+         if (DBG) Log.d(TAG, msg);
+     }
+diff --git a/system/bt/bta/av/bta_av_main.cc b/system/bt/bta/av/bta_av_main.cc
+index 0d7c360..1a0b955 100644
+--- a/system/bt/bta/av/bta_av_main.cc
++++ b/system/bt/bta/av/bta_av_main.cc
+@@ -431,10 +431,11 @@ static void bta_av_api_register(tBTA_AV_DATA* p_data) {
+   LOG_INFO(LOG_TAG, "AVRCP version used for sdp: \"%s\"", avrcp_version);
+ 
+   uint16_t profile_initialized = p_data->api_reg.service_uuid;
+-  if (profile_initialized == UUID_SERVCLASS_AUDIO_SINK) {
++  /*if (profile_initialized == UUID_SERVCLASS_AUDIO_SINK) {
+     p_bta_av_cfg = (tBTA_AV_CFG*)&bta_avk_cfg;
+-  } else if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE) {
+-    p_bta_av_cfg = (tBTA_AV_CFG*)&bta_av_cfg;
++  } else if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE) */{
++    //p_bta_av_cfg = (tBTA_AV_CFG*)&bta_av_cfg;
++  p_bta_av_cfg = (tBTA_AV_CFG*)&bta_avk_cfg;
+ 
+     if (!strncmp(AVRCP_1_3_STRING, avrcp_version, sizeof(AVRCP_1_3_STRING))) {
+       LOG_INFO(LOG_TAG, "AVRCP 1.3 capabilites used");
+@@ -518,7 +519,7 @@ static void bta_av_api_register(tBTA_AV_DATA* p_data) {
+ 
+       /* Set the Capturing service class bit */
+       if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE)
+-        cod.service = BTM_COD_SERVICE_CAPTURING;
++        cod.service = BTM_COD_SERVICE_CAPTURING | BTM_COD_SERVICE_RENDERING;
+       else if (profile_initialized == UUID_SERVCLASS_AUDIO_SINK)
+         cod.service = BTM_COD_SERVICE_RENDERING;
+       utl_set_device_class(&cod, BTA_UTL_SET_COD_SERVICE_CLASS);
+@@ -526,6 +527,7 @@ static void bta_av_api_register(tBTA_AV_DATA* p_data) {
+ 
+     /* get stream configuration and create stream */
+     cs.cfg.num_codec = 1;
++    cs.tsep = AVDT_TSEP_SRC;
+     cs.nsc_mask =
+         AVDT_NSC_RECONFIG |
+         ((bta_av_cb.features & BTA_AV_FEAT_PROTECT) ? 0 : AVDT_NSC_SECURITY);
+@@ -565,7 +567,7 @@ static void bta_av_api_register(tBTA_AV_DATA* p_data) {
+       if (bta_av_cb.features & BTA_AV_FEAT_DELAY_RPT)
+         cs.cfg.psc_mask |= AVDT_PSC_DELAY_RPT;
+ 
+-      if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE) {
++      /*if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE) {
+         cs.tsep = AVDT_TSEP_SRC;
+         codec_index_min = BTAV_A2DP_CODEC_INDEX_SOURCE_MIN;
+         codec_index_max = BTAV_A2DP_CODEC_INDEX_SOURCE_MAX;
+@@ -576,16 +578,24 @@ static void bta_av_api_register(tBTA_AV_DATA* p_data) {
+         codec_index_max = BTAV_A2DP_CODEC_INDEX_SINK_MAX;
+       }
+ 
+-      /* Initialize handles to zero */
++
+       for (int xx = 0; xx < BTAV_A2DP_CODEC_INDEX_MAX; xx++) {
+         p_scb->seps[xx].av_handle = 0;
+-      }
++      }*/
++      codec_index_min = BTAV_A2DP_CODEC_INDEX_SOURCE_MIN;
++      codec_index_max = BTAV_A2DP_CODEC_INDEX_SINK_MAX;
+ 
+       /* keep the configuration in the stream control block */
+       memcpy(&p_scb->cfg, &cs.cfg, sizeof(tAVDT_CFG));
+       for (int i = codec_index_min; i < codec_index_max; i++) {
+         btav_a2dp_codec_index_t codec_index =
+             static_cast<btav_a2dp_codec_index_t>(i);
++        APPL_TRACE_DEBUG("codec_index: %d", codec_index);
++        if(codec_index == 5)
++        {
++            cs.tsep = AVDT_TSEP_SNK;
++            cs.p_sink_data_cback = bta_av_sink_data_cback;
++        }
+         if (!(*bta_av_a2dp_cos.init)(codec_index, &cs.cfg)) {
+           continue;
+         }
+@@ -611,13 +621,16 @@ static void bta_av_api_register(tBTA_AV_DATA* p_data) {
+       if (!bta_av_cb.reg_audio) {
+         bta_av_cb.sdp_a2dp_handle = 0;
+         bta_av_cb.sdp_a2dp_snk_handle = 0;
+-        if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE) {
++       // if (profile_initialized == UUID_SERVCLASS_AUDIO_SOURCE) 
++        {
+           /* create the SDP records on the 1st audio channel */
+           bta_av_cb.sdp_a2dp_handle = SDP_CreateRecord();
+           A2DP_AddRecord(UUID_SERVCLASS_AUDIO_SOURCE, p_service_name, NULL,
+                          A2DP_SUPF_PLAYER, bta_av_cb.sdp_a2dp_handle);
+           bta_sys_add_uuid(UUID_SERVCLASS_AUDIO_SOURCE);
+-        } else if (profile_initialized == UUID_SERVCLASS_AUDIO_SINK) {
++        }
++	   //else if (profile_initialized == UUID_SERVCLASS_AUDIO_SINK) 
++        {
+ #if (BTA_AV_SINK_INCLUDED == TRUE)
+           bta_av_cb.sdp_a2dp_snk_handle = SDP_CreateRecord();
+           A2DP_AddRecord(UUID_SERVCLASS_AUDIO_SINK, p_service_name, NULL,
+diff --git a/system/bt/btif/src/btif_a2dp_sink.cc b/system/bt/btif/src/btif_a2dp_sink.cc
+index 4ccf39f..c9edc48 100644
+--- a/system/bt/btif/src/btif_a2dp_sink.cc
++++ b/system/bt/btif/src/btif_a2dp_sink.cc
+@@ -151,7 +151,7 @@ bool btif_a2dp_sink_startup(void) {
+     return false;
+   }
+ 
+-  btif_a2dp_sink_cb.rx_focus_state = BTIF_A2DP_SINK_FOCUS_NOT_GRANTED;
++  btif_a2dp_sink_cb.rx_focus_state = BTIF_A2DP_SINK_FOCUS_GRANTED;
+   btif_a2dp_sink_cb.audio_track = NULL;
+   btif_a2dp_sink_cb.rx_audio_queue = fixed_queue_new(SIZE_MAX);
+ 
+@@ -384,7 +384,7 @@ static void btif_a2dp_sink_avk_handle_timer(UNUSED_ATTR void* context) {
+   if (btif_a2dp_sink_cb.rx_focus_state == BTIF_A2DP_SINK_FOCUS_NOT_GRANTED) {
+     APPL_TRACE_DEBUG("%s: skipping frames since focus is not present",
+                      __func__);
+-    return;
++    //return;
+   }
+   /* Play only in BTIF_A2DP_SINK_FOCUS_GRANTED case */
+   if (btif_a2dp_sink_cb.rx_flush) {
+diff --git a/system/bt/btif/src/btif_av.cc b/system/bt/btif/src/btif_av.cc
+index 14d4444..32175c5 100644
+--- a/system/bt/btif/src/btif_av.cc
++++ b/system/bt/btif/src/btif_av.cc
+@@ -17,6 +17,7 @@
+  ******************************************************************************/
+ 
+ #define LOG_TAG "btif_av"
++#define BLUETOOTH_RK 1
+ 
+ #include "btif_av.h"
+ 
+@@ -41,6 +42,11 @@
+ #include "osi/include/allocator.h"
+ #include "osi/include/osi.h"
+ 
++#ifdef BLUETOOTH_RK
++#include "btif_storage.h"
++#include "uuid.h"
++#endif
++
+ /*****************************************************************************
+  *  Constants & Macros
+  *****************************************************************************/
+@@ -80,6 +86,10 @@ typedef struct {
+   tBTA_AV_EDR edr;
+   uint8_t peer_sep; /* sep type of peer device */
+   std::vector<btav_a2dp_codec_config_t> codec_priorities;
++  #ifdef BLUETOOTH_RK
++  uint16_t uuid;
++  #endif
++
+ } btif_av_cb_t;
+ 
+ typedef struct {
+@@ -98,8 +108,16 @@ typedef struct {
+  *****************************************************************************/
+ static btav_source_callbacks_t* bt_av_src_callbacks = NULL;
+ static btav_sink_callbacks_t* bt_av_sink_callbacks = NULL;
++
++#ifdef BLUETOOTH_RK
++static btif_av_cb_t btif_av_cb = {
++    0, {{0}}, false, 0, 0, 0, 0, std::vector<btav_a2dp_codec_config_t>(),0};
++#else
+ static btif_av_cb_t btif_av_cb = {
+     0, {{0}}, false, 0, 0, 0, 0, std::vector<btav_a2dp_codec_config_t>()};
++#endif
++	
++
+ static alarm_t* av_open_on_rc_timer = NULL;
+ 
+ /* both interface and media task needs to be ready to alloc incoming request */
+@@ -125,6 +143,10 @@ static alarm_t* av_open_on_rc_timer = NULL;
+   case BTA_AV_REMOTE_RSP_EVT: {    \
+     btif_rc_handler(e, d);         \
+   } break;
++  
++ #ifdef BLUETOOTH_RK
++ static bool btif_av_get_peer_role(RawAddress *bd_addr);
++ #endif
+ 
+ static bool btif_av_state_idle_handler(btif_sm_event_t event, void* data);
+ static bool btif_av_state_opening_handler(btif_sm_event_t event, void* data);
+@@ -255,11 +277,23 @@ static void btif_initiate_av_open_timer_timeout(UNUSED_ATTR void* data) {
+  ******************************************************************************/
+ static void btif_report_connection_state(btav_connection_state_t state,
+                                          RawAddress* bd_addr) {
++  BTIF_TRACE_DEBUG("btif_report_connection_state stat:%d,sep:%d",state,btif_av_cb.peer_sep );    
++#ifdef BLUETOOTH_RK
++  bool peerIsSource;
++  peerIsSource = btif_av_get_peer_role(bd_addr);
++  if (bt_av_sink_callbacks != NULL && (peerIsSource == false || btif_av_cb.uuid == UUID_SERVCLASS_AUDIO_SINK)) {
++      HAL_CBACK(bt_av_sink_callbacks, connection_state_cb, state, bd_addr);
++  } else if ((bt_av_src_callbacks != NULL) && (btif_av_cb.uuid == UUID_SERVCLASS_AUDIO_SOURCE || peerIsSource == true)) {
++      HAL_CBACK(bt_av_src_callbacks, connection_state_cb, state, bd_addr);
++  }
++#else
+   if (bt_av_sink_callbacks != NULL) {
+-    HAL_CBACK(bt_av_sink_callbacks, connection_state_cb, state, bd_addr);
++      HAL_CBACK(bt_av_sink_callbacks, connection_state_cb, state, bd_addr);
+   } else if (bt_av_src_callbacks != NULL) {
+-    HAL_CBACK(bt_av_src_callbacks, connection_state_cb, state, bd_addr);
++      HAL_CBACK(bt_av_src_callbacks, connection_state_cb, state, bd_addr);
+   }
++#endif
++
+ }
+ 
+ /*******************************************************************************
+@@ -277,11 +311,20 @@ static void btif_report_connection_state(btav_connection_state_t state,
+  ******************************************************************************/
+ static void btif_report_audio_state(btav_audio_state_t state,
+                                     RawAddress* bd_addr) {
++  BTIF_TRACE_DEBUG("btif_report_audio_state stat:%d,sep:%d",state,btif_av_cb.peer_sep );   
++#ifdef BLUETOOTH_RK
++  if (btif_av_cb.peer_sep == AVDT_TSEP_SRC && bt_av_sink_callbacks != NULL) {
++      HAL_CBACK(bt_av_sink_callbacks, audio_state_cb, state, bd_addr);
++  } else if (btif_av_cb.peer_sep == AVDT_TSEP_SNK && bt_av_src_callbacks != NULL) {
++      HAL_CBACK(bt_av_src_callbacks, audio_state_cb, state, bd_addr);
++  }
++#else
+   if (bt_av_sink_callbacks != NULL) {
+-    HAL_CBACK(bt_av_sink_callbacks, audio_state_cb, state, bd_addr);
++      HAL_CBACK(bt_av_sink_callbacks, audio_state_cb, state, bd_addr);
+   } else if (bt_av_src_callbacks != NULL) {
+-    HAL_CBACK(bt_av_src_callbacks, audio_state_cb, state, bd_addr);
++      HAL_CBACK(bt_av_src_callbacks, audio_state_cb, state, bd_addr);
+   }
++#endif
+ }
+ 
+ static void btif_update_source_codec(void* p_data) {
+@@ -362,11 +405,10 @@ static bool btif_av_state_idle_handler(btif_sm_event_t event, void* p_data) {
+       } else if (event == BTA_AV_PENDING_EVT) {
+         btif_av_cb.peer_bda = ((tBTA_AV*)p_data)->pend.bd_addr;
+         btif_av_cb.self_initiated_connection = false;
+-        if (bt_av_src_callbacks != NULL) {
++        if (btif_av_cb.peer_sep == AVDT_TSEP_SNK &&bt_av_src_callbacks != NULL) {
+           BTA_AvOpen(btif_av_cb.peer_bda, btif_av_cb.bta_handle, true,
+                      BTA_SEC_AUTHENTICATE, UUID_SERVCLASS_AUDIO_SOURCE);
+-        }
+-        if (bt_av_sink_callbacks != NULL) {
++        }else if (btif_av_cb.peer_sep == AVDT_TSEP_SRC && bt_av_sink_callbacks != NULL) {
+           BTA_AvOpen(btif_av_cb.peer_bda, btif_av_cb.bta_handle, true,
+                      BTA_SEC_AUTHENTICATE, UUID_SERVCLASS_AUDIO_SINK);
+         }
+@@ -954,6 +996,22 @@ static bool btif_av_state_started_handler(btif_sm_event_t event, void* p_data) {
+                    btif_av_cb.flags);
+ 
+   switch (event) {
++
++
++#ifdef BLUETOOTH_RK
++    case BTA_AV_RECONFIG_EVT:
++    {
++      if(p_av->reconfig.status == BTA_AV_SUCCESS)
++      {
++        BTA_AvStart();
++        btif_av_cb.flags &= ~BTIF_AV_FLAG_REMOTE_SUSPEND;
++        btif_report_audio_state(BTAV_AUDIO_STATE_STARTED, &(btif_av_cb.peer_bda));
++        //raise_priority_a2dp(TRUE);
++      }
++    }
++      break;
++#endif
++
+     case BTIF_SM_ENTER_EVT:
+ 
+       /* we are again in started state, clear any remote suspend flags */
+@@ -1226,9 +1284,9 @@ static void bte_av_sink_media_callback(tBTA_AV_EVT event,
+     case BTA_AV_SINK_MEDIA_CFG_EVT: {
+       btif_av_sink_config_req_t config_req;
+ 
+-      /* send a command to BT Media Task */
++
+       btif_a2dp_sink_update_decoder((uint8_t*)(p_data->avk_config.codec_info));
+-      /* Switch to BTIF context */
++
+       config_req.sample_rate =
+           A2DP_GetTrackSampleRate(p_data->avk_config.codec_info);
+       if (config_req.sample_rate == -1) {
+@@ -1263,11 +1321,24 @@ static void bte_av_sink_media_callback(tBTA_AV_EVT event,
+  ******************************************************************************/
+ 
+ bt_status_t btif_av_init(int service_id) {
++	switch (service_id) {
++	  case BTA_A2DP_SOURCE_SERVICE_ID:
++		if (!btif_a2dp_source_startup())
++		  return BT_STATUS_FAIL;  // Already running
++		break;
++	  case BTA_A2DP_SINK_SERVICE_ID:
++		if (!btif_a2dp_sink_startup())
++		  return BT_STATUS_FAIL;  // Already running
++		break;
++	  default:
++		break;
++	}
++
+   if (btif_av_cb.sm_handle == NULL) {
+     alarm_free(av_open_on_rc_timer);
+     av_open_on_rc_timer = alarm_new("btif_av.av_open_on_rc_timer");
+ 
+-    switch (service_id) {
++    /*switch (service_id) {
+       case BTA_A2DP_SOURCE_SERVICE_ID:
+         if (!btif_a2dp_source_startup())
+           return BT_STATUS_FAIL;  // Already running
+@@ -1280,13 +1351,16 @@ bt_status_t btif_av_init(int service_id) {
+         break;
+     }
+ 
+-    btif_enable_service(service_id);
++    btif_enable_service(service_id);*/
+ 
+     /* Also initialize the AV state machine */
+     btif_av_cb.sm_handle = btif_sm_init(
+         (const btif_sm_handler_t*)btif_av_state_handlers, BTIF_AV_STATE_IDLE);
+   }
+ 
++  
++  btif_enable_service(service_id);
++
+   return BT_STATUS_SUCCESS;
+ }
+ 
+@@ -1376,6 +1450,9 @@ static bt_status_t connect_int(RawAddress* bd_addr, uint16_t uuid) {
+   connect_req.target_bda = bd_addr;
+   connect_req.uuid = uuid;
+   BTIF_TRACE_EVENT("%s", __func__);
++#ifdef BLUETOOTH_RK
++  btif_av_cb.uuid = uuid;
++#endif
+ 
+   btif_sm_dispatch(btif_av_cb.sm_handle, BTIF_AV_CONNECT_REQ_EVT,
+                    (char*)&connect_req);
+@@ -1460,6 +1537,10 @@ static void cleanup(int service_uuid) {
+   /* Also shut down the AV state machine */
+   btif_sm_shutdown(btif_av_cb.sm_handle);
+   btif_av_cb.sm_handle = NULL;
++#ifdef BLUETOOTH_RK
++  btif_av_cb.peer_sep = 0;
++  btif_av_cb.uuid = 0;
++#endif
+ }
+ 
+ static void cleanup_src(void) {
+@@ -1600,6 +1681,7 @@ void btif_dispatch_sm_event(btif_av_sm_event_t event, void* p_data, int len) {
+   /* Switch to BTIF context */
+   btif_transfer_context(btif_av_handle_event, event, (char*)p_data, len, NULL);
+ }
++static bool b_AvEnable = false;
+ 
+ /*******************************************************************************
+  *
+@@ -1611,7 +1693,11 @@ void btif_dispatch_sm_event(btif_av_sm_event_t event, void* p_data, int len) {
+  *
+  ******************************************************************************/
+ bt_status_t btif_av_execute_service(bool b_enable) {
++	  if(b_AvEnable)
++		return BT_STATUS_SUCCESS;
++
+   if (b_enable) {
++  	b_AvEnable = true;
+ /* TODO: Removed BTA_SEC_AUTHORIZE since the Java/App does not
+  * handle this request in order to allow incoming connections to succeed.
+  * We need to put this back once support for this is added */
+@@ -1635,9 +1721,10 @@ bt_status_t btif_av_execute_service(bool b_enable) {
+     BTA_AvEnable(BTA_SEC_AUTHENTICATE,
+                  (BTA_AV_FEAT_RCTG | BTA_AV_FEAT_NO_SCO_SSPD), bte_av_callback);
+ #endif
+-    BTA_AvRegister(BTA_AV_CHNL_AUDIO, BTIF_AV_SERVICE_NAME, 0, NULL,
++    BTA_AvRegister(BTA_AV_CHNL_AUDIO, BTIF_AV_SERVICE_NAME, 0, bte_av_sink_media_callback,
+                    UUID_SERVCLASS_AUDIO_SOURCE);
+   } else {
++  b_AvEnable = false;
+     BTA_AvDeregister(btif_av_cb.bta_handle);
+     BTA_AvDisable();
+   }
+@@ -1654,10 +1741,12 @@ bt_status_t btif_av_execute_service(bool b_enable) {
+  *
+  ******************************************************************************/
+ bt_status_t btif_av_sink_execute_service(bool b_enable) {
++	if(b_AvEnable)
++	  return BT_STATUS_SUCCESS;
++
+   if (b_enable) {
+-    /* Added BTA_AV_FEAT_NO_SCO_SSPD - this ensures that the BTA does not
+-     * auto-suspend av streaming on AG events(SCO or Call). The suspend shall
+-     * be initiated by the app/audioflinger layers */
++	  b_AvEnable = true;
++
+     BTA_AvEnable(BTA_SEC_AUTHENTICATE,
+                  BTA_AV_FEAT_NO_SCO_SSPD | BTA_AV_FEAT_RCCT |
+                      BTA_AV_FEAT_METADATA | BTA_AV_FEAT_VENDOR |
+@@ -1667,6 +1756,7 @@ bt_status_t btif_av_sink_execute_service(bool b_enable) {
+     BTA_AvRegister(BTA_AV_CHNL_AUDIO, BTIF_AVK_SERVICE_NAME, 0,
+                    bte_av_sink_media_callback, UUID_SERVCLASS_AUDIO_SINK);
+   } else {
++  b_AvEnable = false;
+     BTA_AvDeregister(btif_av_cb.bta_handle);
+     BTA_AvDisable();
+   }
+@@ -1768,6 +1858,36 @@ bool btif_av_peer_supports_3mbps(void) {
+                    btif_av_is_connected(), is3mbps);
+   return (btif_av_is_connected() && is3mbps);
+ }
++#ifdef BLUETOOTH_RK
++/******************************************************************************
++**
++** Function        btif_av_get_peer_role
++**
++** Description     true: peer is sink; false: peer is source
++**
++** Returns          BOOLEAN
++******************************************************************************/
++static bool btif_av_get_peer_role(RawAddress *bd_addr)
++{
++    bool peerIsSource = false;
++    bt_property_t remote_properties;
++    char uuid_a2dp[128] = "0000110b-0000-1000-8000-00805f9b34fb";
++    uuid_string_t *uuid_string = uuid_string_new();
++    bt_uuid_t remote_uuids[BT_MAX_NUM_UUIDS];
++    BTIF_STORAGE_FILL_PROPERTY(&remote_properties, BT_PROPERTY_UUIDS,sizeof(remote_uuids), remote_uuids);
++    btif_storage_get_remote_device_property(bd_addr,&remote_properties);
++    int i = 0;
++    for(i=0;i < remote_properties.len;i++){
++         uuid_to_string(&remote_uuids[i],uuid_string);
++         if(strcmp(uuid_a2dp,uuid_string_data(uuid_string)) == 0){
++              peerIsSource = true;
++              break;
++          }
++     }
++    uuid_string_free(uuid_string);
++    return peerIsSource;
++}
++#endif
+ 
+ /*******************************************************************************
+  *
+diff --git a/system/bt/btif/src/btif_rc.cc b/system/bt/btif/src/btif_rc.cc
+index edd0730..6f3e573 100644
+--- a/system/bt/btif/src/btif_rc.cc
++++ b/system/bt/btif/src/btif_rc.cc
+@@ -85,7 +85,7 @@
+ #define MAX_LABEL 16
+ #define MAX_TRANSACTIONS_PER_SESSION 16
+ #define PLAY_STATUS_PLAYING 1
+-#define BTIF_RC_NUM_CONN BT_RC_NUM_APP
++#define BTIF_RC_NUM_CONN 2//BT_RC_NUM_APP
+ 
+ #define CHECK_RC_CONNECTED(p_dev)                                          \
+   do {                                                                     \
+@@ -354,7 +354,7 @@ extern bool check_cod(const RawAddress* remote_bdaddr, uint32_t cod);
+ /*****************************************************************************
+  *  Functions
+  *****************************************************************************/
+-static btif_rc_device_cb_t* alloc_device() {
++/*static btif_rc_device_cb_t* alloc_device() {
+   for (int idx = 0; idx < BTIF_RC_NUM_CONN; idx++) {
+     if (btif_rc_cb.rc_multi_cb[idx].rc_state ==
+         BTRC_CONNECTION_STATE_DISCONNECTED) {
+@@ -363,7 +363,7 @@ static btif_rc_device_cb_t* alloc_device() {
+   }
+   return NULL;
+ }
+-
++*/
+ static btif_rc_device_cb_t* get_connected_device(int index) {
+   BTIF_TRACE_DEBUG("%s: index: %d", __func__, index);
+   if (index > BTIF_RC_NUM_CONN) {
+@@ -587,9 +587,15 @@ void handle_rc_browse_connect(tBTA_AV_RC_BROWSE_OPEN* p_rc_br_open) {
+  *
+  ***************************************************************************/
+ void handle_rc_connect(tBTA_AV_RC_OPEN* p_rc_open) {
+-  BTIF_TRACE_DEBUG("%s: rc_handle: %d", __func__, p_rc_open->rc_handle);
+-
+-  btif_rc_device_cb_t* p_dev = alloc_device();
++  BTIF_TRACE_ERROR("%s: rc_handle: %d,peer_features %x", __func__, 
++  	p_rc_open->rc_handle,p_rc_open->peer_features);
++
++ // btif_rc_device_cb_t* p_dev = alloc_device();
++ btif_rc_device_cb_t* p_dev  = NULL;
++ if(p_rc_open->peer_features & BTA_AV_FEAT_RCTG)
++    p_dev = &btif_rc_cb.rc_multi_cb[1];
++ else
++ 	p_dev = &btif_rc_cb.rc_multi_cb[0];
+   if (p_dev == NULL) {
+     BTIF_TRACE_ERROR("%s: p_dev is NULL", __func__);
+     return;
+@@ -631,7 +637,8 @@ void handle_rc_connect(tBTA_AV_RC_OPEN* p_rc_open) {
+   }
+ 
+   p_dev->rc_playing_uid = RC_INVALID_TRACK_ID;
+-  if (bt_rc_ctrl_callbacks != NULL) {
++   BTIF_TRACE_ERROR("%s: p_dev->rc_features %x", __func__,p_dev->rc_features);
++  if (bt_rc_ctrl_callbacks != NULL && (p_dev->rc_features & BTA_AV_FEAT_RCTG)) {
+     RawAddress rc_addr = p_dev->rc_addr;
+     HAL_CBACK(bt_rc_ctrl_callbacks, connection_state_cb, true, false, &rc_addr);
+   }
+@@ -956,7 +963,7 @@ void handle_rc_metamsg_cmd(tBTA_AV_META_MSG* pmeta_msg) {
+  **
+  ***************************************************************************/
+ void btif_rc_handler(tBTA_AV_EVT event, tBTA_AV* p_data) {
+-  BTIF_TRACE_DEBUG("%s: event: %s", __func__, dump_rc_event(event));
++  BTIF_TRACE_ERROR("%s: event: %s", __func__, dump_rc_event(event));
+   btif_rc_device_cb_t* p_dev = NULL;
+   switch (event) {
+     case BTA_AV_RC_OPEN_EVT: {
+@@ -1023,7 +1030,14 @@ void btif_rc_handler(tBTA_AV_EVT event, tBTA_AV* p_data) {
+     } break;
+ 
+     case BTA_AV_META_MSG_EVT: {
+-      if (bt_rc_callbacks != NULL) {
++		p_dev = btif_rc_get_device_by_handle(p_data->rc_feat.rc_handle);
++		bool bSink = false;
++		if(p_dev){
++			BTIF_TRACE_ERROR("rc_features %x", p_dev->rc_features);
++			if(p_dev->rc_features & BTA_AV_FEAT_RCTG)
++				bSink = true;
++		}
++      if (bt_rc_callbacks != NULL && !bSink) {
+         BTIF_TRACE_DEBUG("%s: BTA_AV_META_MSG_EVT code: %d label: %d", __func__,
+                          p_data->meta_msg.code, p_data->meta_msg.label);
+         BTIF_TRACE_DEBUG("%s: company_id: 0x%x len: %d handle: %d", __func__,
+@@ -1034,7 +1048,8 @@ void btif_rc_handler(tBTA_AV_EVT event, tBTA_AV* p_data) {
+         handle_rc_metamsg_cmd(&(p_data->meta_msg));
+ 
+         /* Free the Memory allocated for tAVRC_MSG */
+-      } else if (bt_rc_ctrl_callbacks != NULL) {
++      } else if (bt_rc_ctrl_callbacks != NULL && bSink) 
++      {
+         /* This is case of Sink + CT + TG(for abs vol)) */
+         BTIF_TRACE_DEBUG(
+             "%s BTA_AV_META_MSG_EVT code:%d label:%d opcode %d ctype %d",
+diff --git a/system/bt/include/bt_target.h b/system/bt/include/bt_target.h
+index eadfc92..3024f64 100644
+--- a/system/bt/include/bt_target.h
++++ b/system/bt/include/bt_target.h
+@@ -80,7 +80,7 @@
+ #endif
+ 
+ #ifndef BTA_AV_SINK_INCLUDED
+-#define BTA_AV_SINK_INCLUDED FALSE
++#define BTA_AV_SINK_INCLUDED TRUE
+ #endif
+ 
+ #ifndef BTA_DISABLE_DELAY
